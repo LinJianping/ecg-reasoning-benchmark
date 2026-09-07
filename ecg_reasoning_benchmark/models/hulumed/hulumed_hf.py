@@ -7,6 +7,8 @@ except ImportError:
     pass
 
 import logging
+import os
+from pathlib import Path
 
 import torch
 
@@ -37,16 +39,42 @@ class HuluMedHFModel(BaseModel):
         self.model_variant = model_variant
 
         model_id = f"ZJU-AI4H/Hulu-Med-{model_variant}"
+        local_model_path = os.environ.get("HULUMED_MODEL_PATH")
+        if local_model_path:
+            model_path = Path(os.path.expandvars(local_model_path)).expanduser().resolve()
+            if not model_path.is_dir():
+                raise FileNotFoundError(
+                    f"HULUMED_MODEL_PATH must point to a local model directory: {model_path}"
+                )
+            model_id = str(model_path)
 
         model_kwargs = dict(
             trust_remote_code=True,
             torch_dtype="bfloat16",
             device_map="auto",
-            attn_implementation="flash_attention_2",
+            attn_implementation=os.environ.get("HULUMED_ATTN_IMPLEMENTATION")
+            or "flash_attention_2",
+            local_files_only=bool(local_model_path),
         )
+        max_memory_gib = os.environ.get("HULUMED_MAX_MEMORY_GIB")
+        if max_memory_gib is not None:
+            try:
+                max_memory_gib = int(max_memory_gib)
+            except ValueError as exc:
+                raise ValueError("HULUMED_MAX_MEMORY_GIB must be a positive integer") from exc
+            if max_memory_gib <= 0:
+                raise ValueError("HULUMED_MAX_MEMORY_GIB must be a positive integer")
+            num_devices = torch.cuda.device_count()
+            if num_devices == 0:
+                raise RuntimeError("HULUMED_MAX_MEMORY_GIB requires at least one visible CUDA device")
+            model_kwargs["max_memory"] = {
+                device: f"{max_memory_gib}GiB" for device in range(num_devices)
+            }
 
         self.model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
-        self.processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+        self.processor = AutoProcessor.from_pretrained(
+            model_id, trust_remote_code=True, local_files_only=bool(local_model_path)
+        )
 
     def get_response(
         self, conversation, enable_condensed_chat: bool = False, verbose: bool = False, **kwargs

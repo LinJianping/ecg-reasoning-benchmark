@@ -30,7 +30,12 @@ class HeuristicEvaluator(Evaluator):
         Returns:
             bool: True if the model response is considered correct, False otherwise.
         """
-        callback = getattr(self, f"_validate_{question_type}", None)
+        # Current releases renamed these stages but retain the same answer types.
+        validator_type = {
+            "finding_identification": "finding",
+            "diagnostic_decision": "decision",
+        }.get(question_type, question_type)
+        callback = getattr(self, f"_validate_{validator_type}", None)
         assert callback is not None, f"No validation function found for question type: {question_type}"
 
         return callback(gt, model_response)
